@@ -1,0 +1,562 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'This template creates a VPC infrastructure for a multi-AZ, multi-tier deployment of a Windows based Application infrastructure. It deploys a managed Microsoft AD Directory Service into private subnets in separate Availability Zones inside a VPC, as well as Remote Desktop Gateway instances and managed NAT gateways into the public subnet for each Availability Zone. The default Domain Administrator user is ''admin''.  For adding members to the domain, ensure that they are launched into the domain member security group created by this template and then configure them to use the AD instances fixed private IP addresses as the DNS server. **WARNING** This template creates Amazon EC2 Windows instance and related resources. You will be billed for the AWS resources used if you create a stack from this template.'
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      -
+        Label:
+          default: 'Network Configuration'
+        Parameters:
+        - AvailabilityZones
+        - VPCCIDR
+        - PrivateSubnet1CIDR
+        - PrivateSubnet2CIDR
+        - PublicSubnet1CIDR
+        - PublicSubnet2CIDR
+        - RDGWCIDR
+      -
+        Label:
+          default: 'Amazon EC2 Configuration'
+        Parameters:
+        - KeyPairName
+        - RDGWInstanceType
+        - InstanceType
+      -
+        Label:
+          default: 'Microsoft Active Directory Configuration'
+        Parameters:
+        - DomainDNSName
+        - DomainNetBIOSName
+        - DomainAdminPassword
+        - ADEdition
+      -
+        Label:
+          default: 'Microsoft Remote Desktop Gateway Configuration'
+        Parameters:
+        - NumberOfRDGWHosts
+      -
+        Label:
+          default: 'FSx Configuration'
+        Parameters:
+        - DfsGroup
+        - DfsFolder
+        - SharedDfsPath
+      -
+        Label:
+          default: 'AWS Quick Start Configuration'
+        Parameters:
+        - QSS3BucketName
+        - QSS3KeyPrefix
+    ParameterLabels:
+      AvailabilityZones:
+        default: 'Availability Zones'
+      DfsGroup:
+        default: 'DFS Group Name'
+      DfsFolder:
+        default: 'DFS Folder example: C:\DFS'
+      DomainAdminPassword:
+        default: 'Domain Admin Password'
+      DomainDNSName:
+        default: 'Domain DNS Name'
+      DomainNetBIOSName:
+        default: 'Domain NetBIOS Name'
+      ADEdition:
+        default: 'AWS Microsoft AD edition'
+      InstanceType:
+        default: 'Instance Type for FSx Clients'
+      KeyPairName:
+        default: 'Key Pair Name'
+      NumberOfRDGWHosts:
+        default: 'Number of RDGW hosts'
+      PrivateSubnet1CIDR:
+        default: 'Private Subnet 1 CIDR'
+      PrivateSubnet2CIDR:
+        default: 'Private Subnet 2 CIDR'
+      PublicSubnet1CIDR:
+        default: 'Public Subnet 1 CIDR'
+      PublicSubnet2CIDR:
+        default: 'Public Subnet 2 CIDR'
+      QSS3BucketName:
+        default: 'Quick Start S3 Bucket Name'
+      QSS3KeyPrefix:
+        default: 'Quick Start S3 Key Prefix'
+      RDGWInstanceType:
+        default: 'Remote Desktop Gateway Instance Type'
+      RDGWCIDR:
+        default: 'Allowed Remote Desktop Gateway External Access CIDR'
+      SharedDfsPath:
+        default: 'Directory path to be shared via DFS IE: C:\DFS'
+      VPCCIDR:
+        default: 'VPC CIDR'
+Parameters:
+  AvailabilityZones:
+    Description: 'List of Availability Zones to use for the subnets in the VPC. Note: The logical order is preserved and only 2 AZs are used for this deployment.'
+    Type: 'List<AWS::EC2::AvailabilityZone::Name>'
+  DfsGroup:
+    Default: 'FSxDemo'
+    Type: String
+  DfsFolder:
+    Default: 'C:\DFS'
+    Type: String
+  DomainAdminPassword:
+    AllowedPattern: '(?=^.{6,255}$)((?=.*\d)(?=.*[A-Z])(?=.*[a-z])|(?=.*\d)(?=.*[^A-Za-z0-9])(?=.*[a-z])|(?=.*[^A-Za-z0-9])(?=.*[A-Z])(?=.*[a-z])|(?=.*\d)(?=.*[A-Z])(?=.*[^A-Za-z0-9]))^.*'
+    Description: 'Password for the domain admin user. Must be at least 8 characters containing letters, numbers and symbols'
+    MaxLength: '32'
+    MinLength: '8'
+    NoEcho: 'true'
+    Type: String
+  DomainDNSName:
+    AllowedPattern: '[a-zA-Z0-9\-]+\..+'
+    Default: example.com
+    Description: 'Fully qualified domain name (FQDN) of the forest root domain e.g. example.com'
+    MaxLength: '255'
+    MinLength: '2'
+    Type: String
+  DomainNetBIOSName:
+    AllowedPattern: '[a-zA-Z0-9\-]+'
+    Default: example
+    Description: 'NetBIOS name of the domain (up to 15 characters) for users of earlier versions of Windows e.g. EXAMPLE'
+    MaxLength: '15'
+    MinLength: '1'
+    Type: String
+  ADEdition:
+    AllowedValues:
+    - Standard
+    - Enterprise
+    Default: Enterprise
+    Description: 'The AWS Microsoft AD edition. Valid values include Standard and Enterprise.'
+    Type: String
+  InstanceType:
+    Description: 'Amazon EC2 instance type for the FSx client instances'
+    Type: String
+    Default: t2.large
+    AllowedValues:
+    - t2.large
+    - m4.large
+    - m4.xlarge
+    - m4.2xlarge
+    - m4.4xlarge
+  KeyPairName:
+    Description: 'Public/private key pairs allow you to securely connect to your instance after it launches'
+    Type: 'AWS::EC2::KeyPair::KeyName'
+  NumberOfRDGWHosts:
+    AllowedValues:
+    - '1'
+    - '2'
+    - '3'
+    - '4'
+    Default: '1'
+    Description: 'Enter the number of Remote Desktop Gateway hosts to create'
+    Type: String
+  PrivateSubnet1CIDR:
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$'
+    ConstraintDescription: 'CIDR block parameter must be in the form x.x.x.x/16-28'
+    Default: 10.0.0.0/19
+    Description: 'CIDR block for private subnet 1 located in Availability Zone 1.'
+    Type: String
+  PrivateSubnet2CIDR:
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$'
+    ConstraintDescription: 'CIDR block parameter must be in the form x.x.x.x/16-28'
+    Default: 10.0.32.0/19
+    Description: 'CIDR block for private subnet 2 located in Availability Zone 2.'
+    Type: String
+  PublicSubnet1CIDR:
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$'
+    ConstraintDescription: 'CIDR block parameter must be in the form x.x.x.x/16-28'
+    Default: 10.0.128.0/20
+    Description: 'CIDR Block for the public DMZ subnet 1 located in Availability Zone 1'
+    Type: String
+  PublicSubnet2CIDR:
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$'
+    ConstraintDescription: 'CIDR block parameter must be in the form x.x.x.x/16-28'
+    Default: 10.0.144.0/20
+    Description: 'CIDR Block for the public DMZ subnet 2 located in Availability Zone 2'
+    Type: String
+  QSS3BucketName:
+    AllowedPattern: '^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$'
+    ConstraintDescription: 'Quick Start bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen (-).'
+    Default: aws-quickstart
+    Description: 'S3 bucket name for the Quick Start assets. Quick Start bucket name can include numbers, lowercase letters, uppercase letters, and hyphens (-). It cannot start or end with a hyphen (-).'
+    Type: String
+  QSS3KeyPrefix:
+    AllowedPattern: '^[0-9a-zA-Z-/]*$'
+    ConstraintDescription: 'Quick Start key prefix can include numbers, lowercase letters, uppercase letters, hyphens (-), and forward slash (/).'
+    Default: quickstart-microsoft-activedirectory/
+    Description: 'S3 key prefix for the Quick Start assets. Quick Start key prefix can include numbers, lowercase letters, uppercase letters, hyphens (-), and forward slash (/).'
+    Type: String
+  RDGWInstanceType:
+    Description: 'Amazon EC2 instance type for the Remote Desktop Gateway instances'
+    Type: String
+    Default: t2.large
+    AllowedValues:
+    - t2.large
+    - m4.large
+    - m4.xlarge
+    - m4.2xlarge
+    - m4.4xlarge
+  RDGWCIDR:
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$'
+    ConstraintDescription: 'CIDR block parameter must be in the form x.x.x.x/x'
+    Description: 'Allowed CIDR Block for external access to the Remote Desktop Gateways'
+    Type: String
+  SharedDfsPath:
+    Default: 'C:\DFS'
+    Type: String
+  VPCCIDR:
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$'
+    ConstraintDescription: 'CIDR block parameter must be in the form x.x.x.x/16-28'
+    Default: 10.0.0.0/16
+    Description: 'CIDR Block for the VPC'
+    Type: String
+Conditions:
+  GovCloudCondition: !Equals [!Ref 'AWS::Region', 'us-gov-west-1']
+Mappings: 
+  # regions=$(aws ec2 describe-regions --query "Regions[].RegionName" --output text)
+  # for region in $regions; do linuxami=$(aws --region $region ec2 describe-images --filters "Name=name,Values=amzn-ami-hvm-2018.03.0.20190514-x86_64-gp2" --query "Images[0].ImageId" --output "text"); winami=$(aws --region $region ec2 describe-images --filters "Name=name,Values=Windows_Server-2019-English-Full-Base-2019.04.26" --query "Images[0].ImageId" --output "text"); printf "'$region':\n  linuxami: '$linuxami'\n  winami: '$winami'\n"; done
+  RegionMap:
+    'eu-north-1':
+      linuxami: 'ami-be4bc3c0'
+      winami: 'ami-0f303095ce00b23a9'
+    'ap-south-1':
+      linuxami: 'ami-0eacc5b7915ba9921'
+      winami: 'ami-09dedd42528c4adc9'
+    'eu-west-3':
+      linuxami: 'ami-0f962299dc4d90c81'
+      winami: 'ami-0b50d4f7c25e0c9b3'
+    'eu-west-2':
+      linuxami: 'ami-05663d374a152d239'
+      winami: 'ami-08890ccc3ea1500c1'
+    'eu-west-1':
+      linuxami: 'ami-03c242f4af81b2365'
+      winami: 'ami-02f0a4701f9b8a91e'
+    'ap-northeast-3':
+      linuxami: 'ami-004176091a55d5176'
+      winami: 'ami-09506481cf77f2f25'
+    'ap-northeast-2':
+      linuxami: 'ami-082b5ca9ff663f3b8'
+      winami: 'ami-0089e125f069399a0'
+    'ap-northeast-1':
+      linuxami: 'ami-0ccdbc8c1cb7957be'
+      winami: 'ami-0a39119ef6930f843'
+    'sa-east-1':
+      linuxami: 'ami-0eb2a191bf5e40e10'
+      winami: 'ami-0c7d3ee69860689af'
+    'ca-central-1':
+      linuxami: 'ami-07ab3281411d31d04'
+      winami: 'ami-0c8a6e1fc9a03a529'
+    'ap-southeast-1':
+      linuxami: 'ami-03097abf0db1cdff2'
+      winami: 'ami-05b2eec0169084735'
+    'ap-southeast-2':
+      linuxami: 'ami-05067171f4230ac41'
+      winami: 'ami-04c715c762e2de351'
+    'eu-central-1':
+      linuxami: 'ami-03a71cec707bfc3d7'
+      winami: 'ami-0a79cfa8817a1e572'
+    'us-east-1':
+      linuxami: 'ami-0756fbca465a59a30'
+      winami: 'ami-0204606704df03e7e'
+    'us-east-2':
+      linuxami: 'ami-04768381bf606e2b3'
+      winami: 'ami-0338bce19a7cb103e'
+    'us-west-1':
+      linuxami: 'ami-063dd30adbb186909'
+      winami: 'ami-0349ec1b04afc2f46'
+    'us-west-2':
+      linuxami: 'ami-07a0c6e669965bb7c'
+      winami: 'ami-08f938baed1592ad4'
+Resources:
+  VPCStack:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL:
+        'Fn::Sub':
+          - 'https://${QSS3BucketName}.${QSS3Region}.amazonaws.com/${QSS3KeyPrefix}submodules/quickstart-aws-vpc/templates/aws-vpc.template'
+          - {QSS3Region: {'Fn::If': [GovCloudCondition, s3-us-gov-west-1, s3]}}
+      Parameters:
+          AvailabilityZones:
+            'Fn::Join': [',', {Ref: AvailabilityZones}]
+          KeyPairName: !Ref KeyPairName
+          NumberOfAZs: '2'
+          PrivateSubnet1ACIDR: !Ref PrivateSubnet1CIDR
+          PrivateSubnet2ACIDR: !Ref PrivateSubnet2CIDR
+          PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+          PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+          VPCCIDR: !Ref VPCCIDR
+  ADStack:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL:
+        'Fn::Sub':
+          - 'https://${QSS3BucketName}.${QSS3Region}.amazonaws.com/${QSS3KeyPrefix}templates/ad-3.template'
+          - {QSS3Region: {'Fn::If': [GovCloudCondition, s3-us-gov-west-1, s3]}}
+      Parameters:
+        DomainAdminPassword: !Ref DomainAdminPassword
+        DomainDNSName: !Ref DomainDNSName
+        DomainNetBIOSName: !Ref DomainNetBIOSName
+        ADEdition: !Ref ADEdition
+        PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
+        PrivateSubnet1ID: !GetAtt VPCStack.Outputs.PrivateSubnet1AID
+        PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
+        PrivateSubnet2ID: !GetAtt VPCStack.Outputs.PrivateSubnet2AID
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+        QSS3BucketName: !Ref QSS3BucketName
+        QSS3KeyPrefix: !Ref QSS3KeyPrefix
+        VPCCIDR: !Ref VPCCIDR
+        VPCID: !GetAtt VPCStack.Outputs.VPCID
+  RDGWStack:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL:
+        'Fn::Sub':
+          - 'https://${QSS3BucketName}.${QSS3Region}.amazonaws.com/${QSS3KeyPrefix}submodules/quickstart-microsoft-rdgateway/templates/rdgw-domain.template'
+          - {QSS3Region: {'Fn::If': [GovCloudCondition, s3-us-gov-west-1, s3]}}
+      Parameters:
+        DomainAdminPassword: !Ref DomainAdminPassword
+        DomainAdminUser: admin
+        DomainDNSName: !Ref DomainDNSName
+        DomainMemberSGID: !GetAtt ADStack.Outputs.DomainMemberSGID
+        DomainNetBIOSName: !Ref DomainNetBIOSName
+        KeyPairName: !Ref KeyPairName
+        NumberOfRDGWHosts: !Ref NumberOfRDGWHosts
+        PublicSubnet1ID: !GetAtt VPCStack.Outputs.PublicSubnet1ID
+        PublicSubnet2ID: !GetAtt VPCStack.Outputs.PublicSubnet2ID
+        QSS3BucketName: !Ref QSS3BucketName
+        QSS3KeyPrefix: !Sub '${QSS3KeyPrefix}submodules/quickstart-microsoft-rdgateway/'
+        RDGWInstanceType: !Ref RDGWInstanceType
+        RDGWCIDR: !Ref RDGWCIDR
+        VPCID: !GetAtt VPCStack.Outputs.VPCID
+  # FSx Setup
+  # WindowsSecurityGroup:
+  #   Type: "AWS::EC2::SecurityGroup"
+  #   Metadata:
+  #     cfn_nag:
+  #       rules_to_suppress:
+  #       - id: F1000
+  #         reason: Allow all outnbound for demo
+  #   Properties:
+  #     GroupDescription: "Windows FSx Demo"
+  #     SecurityGroupIngress:
+  #     - Description: RDP Access
+  #       FromPort: 3389
+  #       IpProtocol: tcp
+  #       SourceSecurityGroupId: !GetAtt RDGWStack.Outputs.RemoteDesktopGatewaySGID
+  #       ToPort: 3389
+  #     VpcId: !GetAtt VPCStack.Outputs.VPCID
+  # WindowsSecurityGroupIngress:
+  #   Type: AWS::EC2::SecurityGroupIngress
+  #   Properties: 
+  #     GroupId: !Ref WindowsSecurityGroup
+  #     IpProtocol: '-1'
+  #     SourceSecurityGroupId: !Ref WindowsSecurityGroup
+  FSxSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+        - id: F1000
+          reason: Allow all outnbound for demo
+        - id: W27
+          reason: Allowing range for FSx
+    Properties:
+      GroupDescription: Security Group for FSx for Windows File Server
+      SecurityGroupIngress:
+      - Description: 'Windows FSx Access'
+        FromPort: 445
+        IpProtocol: tcp
+        SourceSecurityGroupId: !GetAtt ADStack.Outputs.DomainMemberSGID
+        ToPort: 445
+      - Description: 'Windows RDP Access'
+        FromPort: 135
+        IpProtocol: tcp
+        SourceSecurityGroupId: !GetAtt ADStack.Outputs.DomainMemberSGID
+        ToPort: 135
+      - Description: 'Windows FSx Ephemeral for RPC'
+        FromPort: 1024
+        IpProtocol: tcp
+        SourceSecurityGroupId: !GetAtt ADStack.Outputs.DomainMemberSGID
+        ToPort: 65535
+      VpcId: !GetAtt VPCStack.Outputs.VPCID
+  # FileSystemSecurityGroupIngress:
+  #   Type: AWS::EC2::SecurityGroupIngress
+  #   Properties:
+  #     GroupId: !Ref FSxSecurityGroup
+  #     IpProtocol: '-1'
+  #     SourceSecurityGroupId: !Ref FSxSecurityGroup
+  DhcpOptions:
+    Type: AWS::EC2::DHCPOptions
+    Properties:
+      DomainName: !Ref DomainDNSName
+      DomainNameServers:
+      - !GetAtt ADStack.Outputs.ADServer1PrivateIP
+      - !GetAtt ADStack.Outputs.ADServer2PrivateIP
+  DhcpOptionsAssociation:
+    Type: "AWS::EC2::VPCDHCPOptionsAssociation"
+    Properties:
+      DhcpOptionsId: !Ref DhcpOptions
+      VpcId: !GetAtt VPCStack.Outputs.VPCID
+  FsxFileSystem1:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      StorageCapacity: 300
+      FileSystemType: WINDOWS
+      SubnetIds:
+      - !GetAtt VPCStack.Outputs.PrivateSubnet1AID
+      SecurityGroupIds:
+      - !Ref FSxSecurityGroup
+      WindowsConfiguration:
+        ActiveDirectoryId: !GetAtt ADStack.Outputs.DirectoryID
+        AutomaticBackupRetentionDays: 14
+        CopyTagsToBackups: yes
+        DailyAutomaticBackupStartTime: '23:30'
+        ThroughputCapacity: 256
+        WeeklyMaintenanceStartTime: '1:23:30'
+  FsxFileSystem2:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      StorageCapacity: 300
+      FileSystemType: WINDOWS
+      SubnetIds:
+      - !GetAtt VPCStack.Outputs.PrivateSubnet2AID
+      SecurityGroupIds:
+      - !Ref FSxSecurityGroup
+      WindowsConfiguration:
+        ActiveDirectoryId: !GetAtt ADStack.Outputs.DirectoryID
+        AutomaticBackupRetentionDays: 14
+        CopyTagsToBackups: yes
+        DailyAutomaticBackupStartTime: '22:30'
+        ThroughputCapacity: 256
+        WeeklyMaintenanceStartTime: '1:22:30'
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+      - !Ref InstanceRole
+  Namespace01:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref InstanceProfile
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', winami]
+      Monitoring: true
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+      - !GetAtt ADStack.Outputs.DomainMemberSGID
+      SubnetId: !GetAtt VPCStack.Outputs.PrivateSubnet1AID
+      Tags:
+      - Key: Name
+        Value: namespace01
+  Namespace02:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref InstanceProfile
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', winami]
+      Monitoring: true
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+      - !GetAtt ADStack.Outputs.DomainMemberSGID
+      SubnetId: !GetAtt VPCStack.Outputs.PrivateSubnet2AID
+      Tags:
+      - Key: Name
+        Value: namespace02
+  FsxDomainJoinInstallDFS:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Command
+      Content:
+        schemaVersion: "2.2"
+        description: Join instance to an AWS Directory Service Domain
+        parameters:
+          directoryId:
+            type: String
+            description: (Required) ID of the AWS Managed Microsoft AD (i.e. d-0123456789)
+          directoryName:
+            type: String
+            description: (Required) Directory name (i.e. example.com)
+          dnsIpAddresses:
+            type: StringList
+            default: []
+            description: "(Optional) AWS Managed Microsoft AD DNS IP addresses (i.e. 172.31.0.11, 172.31.0.12)
+              Required when DHCP is not configured. Learn more at http://docs.aws.amazon.com/directoryservice/latest/simple-ad/join_get_dns_addresses.html"
+          dfsGroup:
+            type: String
+            description: (Required) DFS Group Name
+          dfsFolder:
+            type: String
+            description: (Required) DFS Folder Name
+          primaryDfs:
+            type: String
+            description: (Required) Primary FSx DNS Address
+          secondaryDfs:
+            type: String
+            description: (Required) Secondary FSx DNS Address
+          ContentPath:
+            type: String
+            description: (Required) Content Path to replicate
+          domainAdmin:
+            type: String
+            description: (Required) Domain Admin username
+          domainAdminPassword:
+            type: String
+            description: (Required) Domain Admin Password
+        mainSteps:
+        - action: aws:domainJoin
+          name: joinDomain
+          inputs:
+            directoryId: "{{ directoryId }}"
+            directoryName: "{{ directoryName }}"
+            dnsIpAddresses: "{{ dnsIpAddresses }}"
+        - action: aws:runPowerShellScript
+          name: installDfsMgmt
+          inputs:
+            runCommand:
+            - Install-WindowsFeature -Name FS-FileServer, FS-DFS-namespace -IncludeManagementTools;
+            - Install-WindowsFeature -Name RSAT-DFS-Mgmt-Con
+            - New-Item -Type Directory -Path "C:\DFS"
+            - $PWord = ConvertTo-SecureString -String "{{ domainAdminPassword  }}" -AsPlainText -Force
+            - $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList "{{ domainAdmin }}}", $PWord
+            - New-DfsReplicationGroup –GroupName "{{ dfsGroup }}"
+            - New-DfsReplicationGroup –GroupName "{{ dfsGroup }}"
+            - New-DfsReplicatedFolder –GroupName "{{ dfsGroup }}" –FolderName "{{ dfsFolder }}"
+            - $C1 = (Get-ADObject -Filter "objectClass -eq 'Computer' -and ServicePrincipalName -eq 'HOST/"{{ primaryDfs }}"'").Name
+            - $C2 = (Get-ADObject -Filter "objectClass -eq 'Computer' -and ServicePrincipalName -eq 'HOST/"{{ secondaryDfs }}"'").Name
+            - Add-DfsrMember –GroupName "{{ dfsGroup }}" –ComputerName $C1
+            - Add-DfsrMember –GroupName "{{ dfsGroup }}" –ComputerName $C2
+            - Set-DfsrMembership –GroupName "{{ dfsGroup }}" –FolderName "{{ dfsFolder }}" –ContentPath "{{ ContentPath }}" –ComputerName $C1 –PrimaryMember $True
+            - Set-DfsrMembership –GroupName "{{ dfsGroup }}" –FolderName "{{ dfsFolder }}" –ContentPath "{{ ContentPath }}" –ComputerName $C2 –PrimaryMember $True
+            - Add-DfsrConnection –GroupName "{{ dfsGroup }}" –SourceComputerName $C1 –DestinationComputerName $C2
+  SSMAssociation:
+    Type: AWS::SSM::Association
+    Properties:
+      Name: !Ref FsxDomainJoinInstallDFS
+      Parameters:
+        directoryId: [!GetAtt ADStack.Outputs.DirectoryID]
+        directoryName: [!Ref DomainDNSName]
+        dnsIpAddresses:
+        - !GetAtt ADStack.Outputs.ADServer1PrivateIP
+        - !GetAtt ADStack.Outputs.ADServer2PrivateIP
+        dfsGroup: [!Ref DfsGroup]
+        dfsFolder: [!Ref DfsFolder]
+        primaryDfs: [!Join ['.', [!Ref FsxFileSystem1, !Ref DomainDNSName]]]
+        secondaryDfs: [!Join ['.', [!Ref FsxFileSystem2, !Ref DomainDNSName]]]
+        ContentPath: [!Ref SharedDfsPath]
+        domainAdmin: [!Join ['\', [!Ref DomainNetBIOSName, 'admin']]]
+        domainAdminPassword: [!Ref DomainAdminPassword]
+      Targets:
+      - Key: InstanceIds
+        Values: [!Ref Namespace01, !Ref Namespace02]
